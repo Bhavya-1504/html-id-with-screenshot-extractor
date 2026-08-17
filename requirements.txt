@@ -1,0 +1,2 @@
+streamlit==1.49.1
+playwright==1.55.0
