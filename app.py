@@ -62,21 +62,34 @@ async def wait_for_page(page):
     await page.wait_for_timeout(1000)
 
 async def capture_hover_screenshot(page, element, element_id, folder, index):
-    """Capture exactly one screenshot of the element while hovered."""
+    """
+    Capture one slightly enlarged screenshot of the exact element
+    carrying the link_ ID, after hover.
+
+    The element itself is highlighted so it is easy to identify.
+    """
+
     sid = safe_name(element_id)
     screenshot_path = folder / f"{index:03d}_{sid}.png"
 
-    # Disable transitions/animations so the screenshot is stable.
-    await page.add_style_tag(content="""
-        *, *::before, *::after {
-            animation-duration: 0s !important;
-            animation-delay: 0s !important;
-            transition-duration: 0s !important;
-            transition-delay: 0s !important;
-            scroll-behavior: auto !important;
-        }
-    """)
+    # Keep the screenshot close to the element.
+    PADDING = 25
 
+    # Disable animations/transitions for a stable screenshot.
+    try:
+        await page.add_style_tag(content="""
+            *, *::before, *::after {
+                animation-duration: 0s !important;
+                animation-delay: 0s !important;
+                transition-duration: 0s !important;
+                transition-delay: 0s !important;
+                scroll-behavior: auto !important;
+            }
+        """)
+    except Exception:
+        pass
+
+    # Scroll the exact ID-bearing element into view.
     try:
         await element.scroll_into_view_if_needed(timeout=5000)
     except Exception:
@@ -84,34 +97,150 @@ async def capture_hover_screenshot(page, element, element_id, folder, index):
 
     await page.wait_for_timeout(400)
 
-    if not await element.is_visible():
+    # Make sure it is visible.
+    try:
+        if not await element.is_visible():
+            return ""
+    except Exception:
         return ""
 
-    # Move the real mouse over the element. This triggers CSS :hover
-    # and JavaScript mouseenter/mouseover behavior.
-    try:
-        await element.hover(force=True, timeout=10000)
-    except Exception:
-        box = await element.bounding_box()
-        if box:
-            await page.mouse.move(
-                box["x"] + box["width"] / 2,
-                box["y"] + box["height"] / 2
-            )
+    # ---------------------------------------------------------
+    # 1. HOVER THE EXACT ELEMENT
+    # ---------------------------------------------------------
 
-    # Allow hover menus/tooltips/styles to appear.
+    try:
+        box = await element.bounding_box()
+
+        if not box:
+            return ""
+
+        await page.mouse.move(
+            box["x"] + box["width"] / 2,
+            box["y"] + box["height"] / 2
+        )
+
+    except Exception:
+        try:
+            await element.hover(
+                force=True,
+                timeout=10000
+            )
+        except Exception:
+            return ""
+
+    # Allow the site's hover state to appear.
     await page.wait_for_timeout(700)
 
-    try:
-        await element.screenshot(
-            path=str(screenshot_path),
-            animations="disabled",
-            timeout=10000
-        )
-        return str(screenshot_path) if screenshot_path.exists() else ""
-    except Exception:
+    # Recalculate after hover.
+    box = await element.bounding_box()
+
+    if not box:
         return ""
 
+    # ---------------------------------------------------------
+    # 2. ADD TEMPORARY HIGHLIGHT
+    # ---------------------------------------------------------
+
+    try:
+        await element.evaluate("""
+            (el) => {
+                el.dataset.originalOutline =
+                    el.style.outline || "";
+
+                el.dataset.originalOutlineOffset =
+                    el.style.outlineOffset || "";
+
+                el.style.outline = "3px solid red";
+                el.style.outlineOffset = "2px";
+            }
+        """)
+    except Exception:
+        pass
+
+    await page.wait_for_timeout(150)
+
+    # ---------------------------------------------------------
+    # 3. GET EXACT RENDERED ELEMENT POSITION
+    # ---------------------------------------------------------
+
+    rect = await element.evaluate("""
+        (el) => {
+            const r = el.getBoundingClientRect();
+
+            return {
+                x: r.left,
+                y: r.top,
+                width: r.width,
+                height: r.height
+            };
+        }
+    """)
+
+    if not rect:
+        return ""
+
+    if rect["width"] <= 0 or rect["height"] <= 0:
+        return ""
+
+    # ---------------------------------------------------------
+    # 4. CAPTURE SLIGHTLY LARGER AREA
+    # ---------------------------------------------------------
+
+    clip = {
+        "x": max(0, rect["x"] - PADDING),
+        "y": max(0, rect["y"] - PADDING),
+        "width": rect["width"] + (PADDING * 2),
+        "height": rect["height"] + (PADDING * 2)
+    }
+
+    # Keep the clip inside the viewport.
+    viewport = page.viewport_size
+
+    if viewport:
+        clip["width"] = min(
+            clip["width"],
+            viewport["width"] - clip["x"]
+        )
+
+        clip["height"] = min(
+            clip["height"],
+            viewport["height"] - clip["y"]
+        )
+
+    try:
+        await page.screenshot(
+            path=str(screenshot_path),
+            clip=clip,
+            animations="disabled",
+            timeout=15000
+        )
+    except Exception:
+        screenshot_path = None
+
+    # ---------------------------------------------------------
+    # 5. REMOVE TEMPORARY HIGHLIGHT
+    # ---------------------------------------------------------
+
+    try:
+        await element.evaluate("""
+            (el) => {
+                el.style.outline =
+                    el.dataset.originalOutline || "";
+
+                el.style.outlineOffset =
+                    el.dataset.originalOutlineOffset || "";
+
+                delete el.dataset.originalOutline;
+                delete el.dataset.originalOutlineOffset;
+            }
+        """)
+    except Exception:
+        pass
+
+    if screenshot_path and screenshot_path.exists():
+        return str(screenshot_path)
+
+    return ""
 async def handle_onetrust_consent(page):
     """
     Try to accept all OneTrust cookies before extracting IDs.
