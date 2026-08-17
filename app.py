@@ -62,55 +62,148 @@ async def wait_for_page(page):
     await page.wait_for_timeout(1000)
 
 async def capture_hover_screenshot(page, element, element_id, folder, index):
-    """Capture exactly one screenshot of the element while hovered."""
+    """
+    Capture one screenshot of the actual rendered page after hovering.
+    Do NOT use element.screenshot(), because some hover content can be
+    rendered outside the element's DOM bounding box.
+    """
+
     sid = safe_name(element_id)
     screenshot_path = folder / f"{index:03d}_{sid}.png"
+    viewport_path = folder / f"{index:03d}_{sid}_viewport.png"
 
-    # Disable transitions/animations so the screenshot is stable.
-    await page.add_style_tag(content="""
-        *, *::before, *::after {
-            animation-duration: 0s !important;
-            animation-delay: 0s !important;
-            transition-duration: 0s !important;
-            transition-delay: 0s !important;
-            scroll-behavior: auto !important;
-        }
-    """)
+    # Disable animations/transitions so the hover state is stable.
+    try:
+        await page.add_style_tag(content="""
+            *, *::before, *::after {
+                animation-duration: 0s !important;
+                animation-delay: 0s !important;
+                transition-duration: 0s !important;
+                transition-delay: 0s !important;
+                scroll-behavior: auto !important;
+            }
+        """)
+    except Exception:
+        pass
 
+    # Bring the element into the viewport.
     try:
         await element.scroll_into_view_if_needed(timeout=5000)
     except Exception:
         pass
 
-    await page.wait_for_timeout(400)
+    await page.wait_for_timeout(500)
 
-    if not await element.is_visible():
+    try:
+        if not await element.is_visible():
+            return ""
+    except Exception:
         return ""
 
-    # Move the real mouse over the element. This triggers CSS :hover
-    # and JavaScript mouseenter/mouseover behavior.
+    # IMPORTANT:
+    # Trigger the real mouse hover.
     try:
-        await element.hover(force=True, timeout=10000)
+        await element.hover(
+            force=True,
+            timeout=10000
+        )
     except Exception:
         box = await element.bounding_box()
+
         if box:
             await page.mouse.move(
                 box["x"] + box["width"] / 2,
                 box["y"] + box["height"] / 2
             )
 
-    # Allow hover menus/tooltips/styles to appear.
-    await page.wait_for_timeout(700)
+    # Give :hover / mouseenter / dropdowns / tooltips time to render.
+    await page.wait_for_timeout(900)
 
+    # Take a screenshot of the RENDERED PAGE.
+    # Do not use element.screenshot().
     try:
-        await element.screenshot(
-            path=str(screenshot_path),
+        await page.screenshot(
+            path=str(viewport_path),
+            full_page=False,
             animations="disabled",
-            timeout=10000
+            timeout=15000
         )
-        return str(screenshot_path) if screenshot_path.exists() else ""
     except Exception:
         return ""
+
+    # Crop around the element from the rendered screenshot.
+    try:
+        box = await element.bounding_box()
+
+        if not box:
+            return str(viewport_path)
+
+        from PIL import Image
+
+        image = Image.open(viewport_path)
+
+        image_width, image_height = image.size
+
+        # Large padding because hover content may appear outside
+        # the element's original DOM box.
+        padding_x = 350
+        padding_y = 250
+
+        try:
+            scale = await page.evaluate(
+                "() => window.devicePixelRatio || 1"
+            )
+        except Exception:
+            scale = 1
+
+        left = max(
+            0,
+            int((box["x"] - padding_x) * scale)
+        )
+
+        top = max(
+            0,
+            int((box["y"] - padding_y) * scale)
+        )
+
+        right = min(
+            image_width,
+            int(
+                (box["x"] + box["width"] + padding_x)
+                * scale
+            )
+        )
+
+        bottom = min(
+            image_height,
+            int(
+                (box["y"] + box["height"] + padding_y)
+                * scale
+            )
+        )
+
+        cropped = image.crop(
+            (left, top, right, bottom)
+        )
+
+        cropped.save(
+            screenshot_path,
+            format="PNG"
+        )
+
+        image.close()
+
+        # Remove temporary viewport screenshot.
+        try:
+            viewport_path.unlink()
+        except Exception:
+            pass
+
+        return str(screenshot_path)
+
+    except Exception:
+        # If cropping fails, keep the rendered viewport screenshot.
+        return str(viewport_path)
 
 async def handle_onetrust_consent(page):
     """
@@ -177,7 +270,6 @@ async def handle_onetrust_consent(page):
     # If the banner is visible but no Accept All control was found,
     # continue extraction as requested.
     return "Consent banner detected – Accept All not found"
-
 
 async def process_url(browser, url, index):
     parsed = urlparse(url)
