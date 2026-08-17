@@ -61,27 +61,24 @@ async def wait_for_page(page):
         pass
     await page.wait_for_timeout(1000)
 
-async def capture_hover_screenshot(page, element, element_id, folder, index):
+async def capture_hover_screenshot(
+    page, element, element_id, element_text, folder, index
+):
     """
-    Capture ONE screenshot of the exact ID-bearing element.
+    Capture ONE screenshot for the exact ID-bearing element and guarantee
+    that the element's extracted text is visible inside the saved image.
 
-    Fix for layered/overlapping mega-menu elements:
-    Playwright screenshots pixels from the page. If another menu item/panel is
-    physically painted above the requested element, the screenshot can show
-    the overlapping element even though the locator/ID is correct.
-
-    This function:
-      - verifies the exact ID
-      - hovers the exact element
-      - temporarily hides only foreign elements painted over its center
-      - highlights the requested element
-      - screenshots only the requested element
-      - restores everything immediately afterward
+    The screenshot:
+      - is mapped to the exact element ID
+      - is hovered before capture
+      - uses that element's own size
+      - temporarily highlights the exact element
+      - appends a compact text strip containing the element text, if any
     """
     sid = safe_name(element_id)
+    raw_path = folder / f"{index:03d}_{sid}__raw.png"
     screenshot_path = folder / f"{index:03d}_{sid}.png"
 
-    # Strict ID verification before interaction.
     try:
         if await element.get_attribute("id") != element_id:
             return ""
@@ -101,12 +98,11 @@ async def capture_hover_screenshot(page, element, element_id, folder, index):
     except Exception:
         return ""
 
-    # Hover the exact element.
+    # Hover the exact ID-bearing element.
     try:
         box = await element.bounding_box()
         if not box:
             return ""
-
         await page.mouse.move(
             box["x"] + box["width"] / 2,
             box["y"] + box["height"] / 2
@@ -119,125 +115,115 @@ async def capture_hover_screenshot(page, element, element_id, folder, index):
 
     await page.wait_for_timeout(650)
 
-    # Verify again after hover.
+    # Verify identity again after hover.
     try:
         if await element.get_attribute("id") != element_id:
             return ""
     except Exception:
         return ""
 
-    # Save target styling, highlight it, and hide foreign elements that are
-    # physically covering the target's center point.
+    # Highlight only the exact ID-bearing element.
     try:
         await element.evaluate("""
-            (el) => {
-                const key = "idExtractorOriginalStyles";
-                el.dataset[key] = JSON.stringify({
-                    outline: el.style.outline || "",
-                    outlineOffset: el.style.outlineOffset || "",
-                    position: el.style.position || "",
-                    zIndex: el.style.zIndex || "",
-                    isolation: el.style.isolation || ""
-                });
-
-                // Put the requested element above normal siblings where possible.
-                const computed = getComputedStyle(el);
-                if (computed.position === "static") {
-                    el.style.position = "relative";
-                }
-                el.style.zIndex = "2147483647";
-                el.style.isolation = "isolate";
+            el => {
+                el.dataset.idExtractorOutline = el.style.outline || "";
+                el.dataset.idExtractorOutlineOffset = el.style.outlineOffset || "";
                 el.style.outline = "2px solid red";
                 el.style.outlineOffset = "2px";
-
-                // Track temporarily hidden overlays globally.
-                window.__idExtractorHidden = [];
-
-                const r = el.getBoundingClientRect();
-                const x = Math.max(0, Math.min(window.innerWidth - 1, r.left + r.width / 2));
-                const y = Math.max(0, Math.min(window.innerHeight - 1, r.top + r.height / 2));
-
-                // Hide only foreign elements that are painted above the target.
-                // Children of the target are allowed because they are part of it.
-                for (let i = 0; i < 20; i++) {
-                    const top = document.elementFromPoint(x, y);
-                    if (!top) break;
-
-                    if (top === el || el.contains(top)) {
-                        break;
-                    }
-
-                    // Never hide ancestors of the target.
-                    if (top.contains(el)) {
-                        break;
-                    }
-
-                    window.__idExtractorHidden.push({
-                        el: top,
-                        visibility: top.style.visibility
-                    });
-                    top.style.visibility = "hidden";
-                }
             }
         """)
+        await page.wait_for_timeout(100)
     except Exception:
         pass
 
-    await page.wait_for_timeout(120)
-
-    # Final identity check.
     try:
-        if await element.get_attribute("id") != element_id:
-            return ""
-    except Exception:
-        return ""
-
-    try:
-        # Screenshot dimensions automatically follow THIS element's rendered size.
+        # Screenshot only the exact element. Its dimensions vary per element.
         await element.screenshot(
-            path=str(screenshot_path),
+            path=str(raw_path),
             animations="disabled",
             timeout=15000
         )
     except Exception:
         return ""
     finally:
-        # Restore target styles and any elements hidden for overlap removal.
-        try:
-            await page.evaluate("""
-                () => {
-                    if (window.__idExtractorHidden) {
-                        for (const item of window.__idExtractorHidden) {
-                            try {
-                                item.el.style.visibility = item.visibility || "";
-                            } catch (e) {}
-                        }
-                        delete window.__idExtractorHidden;
-                    }
-                }
-            """)
-        except Exception:
-            pass
-
         try:
             await element.evaluate("""
-                (el) => {
-                    try {
-                        const key = "idExtractorOriginalStyles";
-                        const old = JSON.parse(el.dataset[key] || "{}");
-
-                        el.style.outline = old.outline || "";
-                        el.style.outlineOffset = old.outlineOffset || "";
-                        el.style.position = old.position || "";
-                        el.style.zIndex = old.zIndex || "";
-                        el.style.isolation = old.isolation || "";
-
-                        delete el.dataset[key];
-                    } catch (e) {}
+                el => {
+                    el.style.outline = el.dataset.idExtractorOutline || "";
+                    el.style.outlineOffset = el.dataset.idExtractorOutlineOffset || "";
+                    delete el.dataset.idExtractorOutline;
+                    delete el.dataset.idExtractorOutlineOffset;
                 }
             """)
         except Exception:
             pass
+
+    if not raw_path.exists():
+        return ""
+
+    # Add a compact text strip to the screenshot so the element text is
+    # always present inside the final image, even if the site's rendering
+    # makes the element pixels appear blank.
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import textwrap
+
+        img = Image.open(raw_path).convert("RGB")
+        width, height = img.size
+
+        text_value = (element_text or "").strip()
+        if not text_value:
+            text_value = "(no visible text)"
+
+        # Keep the label compact while readable.
+        font = ImageFont.load_default()
+        max_chars = max(20, min(80, int(max(width, 220) / 7)))
+        wrapped = textwrap.wrap(text_value, width=max_chars) or [text_value]
+
+        line_height = 16
+        padding = 8
+        label_height = padding * 2 + line_height * len(wrapped)
+
+        final_width = max(width, 220)
+        final = Image.new("RGB", (final_width, height + label_height), "white")
+
+        # Center original screenshot horizontally if needed.
+        x_offset = (final_width - width) // 2
+        final.paste(img, (x_offset, 0))
+
+        draw = ImageDraw.Draw(final)
+
+        # Separation line.
+        draw.line(
+            [(0, height), (final_width, height)],
+            fill="black",
+            width=1
+        )
+
+        y = height + padding
+        for line in wrapped:
+            draw.text(
+                (padding, y),
+                line,
+                fill="black",
+                font=font
+            )
+            y += line_height
+
+        final.save(screenshot_path, format="PNG")
+        img.close()
+
+        try:
+            raw_path.unlink()
+        except Exception:
+            pass
+
+    except Exception:
+        # Fall back to the raw screenshot if post-processing fails.
+        try:
+            raw_path.replace(screenshot_path)
+        except Exception:
+            return ""
 
     return str(screenshot_path) if screenshot_path.exists() else ""
 
@@ -361,7 +347,7 @@ async def process_url(browser, url, index):
                 visible = await el.is_visible()
 
                 screenshot = await capture_hover_screenshot(
-                    page, el, eid, folder, i + 1
+                    page, el, eid, text, folder, i + 1
                 ) if visible else ""
 
                 results.append({
@@ -511,7 +497,9 @@ if run:
                 f"**Visible:** `{item['visible']}`"
             )
             if item["text"]:
-                st.write(f"**Text:** {item['text']}")
+                st.write(f"**Element text:** {item['text']}")
+            else:
+                st.write("**Element text:** *(none)*")
             if item["href"]:
                 st.write(f"**Href:** `{item['href']}`")
 

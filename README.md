@@ -1,15 +1,15 @@
-# HTML ID Extractor — Exact ID + Overlap-Safe Screenshots
+# HTML ID Extractor — Text Included in Screenshot
 
-This version fixes a specific mega-menu problem where the correct ID was
-selected, but another menu item was painted above it at the same screen
-coordinates, causing the screenshot to visually show the wrong element.
+For each `link_` ID the app now:
+- extracts the exact ID-bearing element
+- extracts that element's text, if any
+- shows the text in Streamlit as **Element text**
+- hovers the exact element
+- captures one screenshot at that element's own dimensions
+- highlights the exact ID-bearing element
+- appends a compact text strip to the saved screenshot containing the
+  extracted element text
 
-For each `link_` ID:
-- the exact ID-bearing DOM element is selected and verified
-- that exact element is hovered
-- foreign elements painted over its center are temporarily hidden
-- the exact element is temporarily raised/highlighted
-- one screenshot is captured at that element's own rendered dimensions
-- all temporary visual changes are immediately restored
+If an element has no text, the image label says `(no visible text)`.
 
-OneTrust handling is unchanged.
+OneTrust consent handling remains unchanged.
