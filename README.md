@@ -1,15 +1,18 @@
-# HTML ID Extractor — Text Included in Screenshot
+# HTML ID Extractor — Depth-First Hover + CSV + Text Footer
 
-For each `link_` ID the app now:
-- extracts the exact ID-bearing element
-- extracts that element's text, if any
-- shows the text in Streamlit as **Element text**
-- hovers the exact element
-- captures one screenshot at that element's own dimensions
-- highlights the exact ID-bearing element
-- appends a compact text strip to the saved screenshot containing the
-  extracted element text
+Changes in this version:
+- CSV no longer contains `section`.
+- CSV columns are:
+  - id
+  - href
+  - element_text
+  - tag
+- Each screenshot still captures the exact ID-bearing element.
+- The element text is appended BELOW the screenshot in a separate metadata panel.
+- The metadata panel has:
+  - a strong divider
+  - a border
+  - an `ELEMENT TEXT` label
+- This makes the extracted text visually distinct from text rendered by the webpage.
 
-If an element has no text, the image label says `(no visible text)`.
-
-OneTrust consent handling remains unchanged.
+OneTrust handling, parent -> child -> grandchild traversal, and hover reset remain unchanged.
