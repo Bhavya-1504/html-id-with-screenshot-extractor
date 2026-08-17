@@ -1,11 +1,15 @@
-# HTML ID Extractor — Exact ID Mapping
+# HTML ID Extractor — Exact ID + Overlap-Safe Screenshots
 
-- Handles OneTrust Accept All before extraction.
-- Freezes the list of `link_` IDs before hover interactions.
-- Uses a stable DOM ElementHandle for each exact ID, not `nth()`.
-- Verifies the ID before capture.
-- One screenshot per ID.
-- Screenshot size follows each element independently.
-- Adds small adaptive padding.
-- Highlights the exact ID-bearing element.
-- Works with any HTML tag.
+This version fixes a specific mega-menu problem where the correct ID was
+selected, but another menu item was painted above it at the same screen
+coordinates, causing the screenshot to visually show the wrong element.
+
+For each `link_` ID:
+- the exact ID-bearing DOM element is selected and verified
+- that exact element is hovered
+- foreign elements painted over its center are temporarily hidden
+- the exact element is temporarily raised/highlighted
+- one screenshot is captured at that element's own rendered dimensions
+- all temporary visual changes are immediately restored
+
+OneTrust handling is unchanged.

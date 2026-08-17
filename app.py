@@ -62,13 +62,26 @@ async def wait_for_page(page):
     await page.wait_for_timeout(1000)
 
 async def capture_hover_screenshot(page, element, element_id, folder, index):
-    """Capture one screenshot of the exact ID-bearing element in hover state."""
-    from PIL import Image, ImageOps
+    """
+    Capture ONE screenshot of the exact ID-bearing element.
 
+    Fix for layered/overlapping mega-menu elements:
+    Playwright screenshots pixels from the page. If another menu item/panel is
+    physically painted above the requested element, the screenshot can show
+    the overlapping element even though the locator/ID is correct.
+
+    This function:
+      - verifies the exact ID
+      - hovers the exact element
+      - temporarily hides only foreign elements painted over its center
+      - highlights the requested element
+      - screenshots only the requested element
+      - restores everything immediately afterward
+    """
     sid = safe_name(element_id)
-    raw_path = folder / f"{index:03d}_{sid}__raw.png"
     screenshot_path = folder / f"{index:03d}_{sid}.png"
 
+    # Strict ID verification before interaction.
     try:
         if await element.get_attribute("id") != element_id:
             return ""
@@ -79,6 +92,7 @@ async def capture_hover_screenshot(page, element, element_id, folder, index):
         await element.scroll_into_view_if_needed(timeout=5000)
     except Exception:
         pass
+
     await page.wait_for_timeout(350)
 
     try:
@@ -87,78 +101,143 @@ async def capture_hover_screenshot(page, element, element_id, folder, index):
     except Exception:
         return ""
 
+    # Hover the exact element.
     try:
-        await element.hover(force=True, timeout=10000)
+        box = await element.bounding_box()
+        if not box:
+            return ""
+
+        await page.mouse.move(
+            box["x"] + box["width"] / 2,
+            box["y"] + box["height"] / 2
+        )
     except Exception:
         try:
-            box = await element.bounding_box()
-            if not box:
-                return ""
-            await page.mouse.move(
-                box["x"] + box["width"] / 2,
-                box["y"] + box["height"] / 2
-            )
+            await element.hover(force=True, timeout=10000)
         except Exception:
             return ""
 
     await page.wait_for_timeout(650)
 
+    # Verify again after hover.
     try:
         if await element.get_attribute("id") != element_id:
             return ""
     except Exception:
         return ""
 
-    # Highlight only this exact element, inside its own box.
+    # Save target styling, highlight it, and hide foreign elements that are
+    # physically covering the target's center point.
     try:
         await element.evaluate("""
-            el => {
-                el.dataset.idExtractorOldBoxShadow = el.style.boxShadow || "";
-                el.style.boxShadow = "inset 0 0 0 3px #ff0000";
+            (el) => {
+                const key = "idExtractorOriginalStyles";
+                el.dataset[key] = JSON.stringify({
+                    outline: el.style.outline || "",
+                    outlineOffset: el.style.outlineOffset || "",
+                    position: el.style.position || "",
+                    zIndex: el.style.zIndex || "",
+                    isolation: el.style.isolation || ""
+                });
+
+                // Put the requested element above normal siblings where possible.
+                const computed = getComputedStyle(el);
+                if (computed.position === "static") {
+                    el.style.position = "relative";
+                }
+                el.style.zIndex = "2147483647";
+                el.style.isolation = "isolate";
+                el.style.outline = "2px solid red";
+                el.style.outlineOffset = "2px";
+
+                // Track temporarily hidden overlays globally.
+                window.__idExtractorHidden = [];
+
+                const r = el.getBoundingClientRect();
+                const x = Math.max(0, Math.min(window.innerWidth - 1, r.left + r.width / 2));
+                const y = Math.max(0, Math.min(window.innerHeight - 1, r.top + r.height / 2));
+
+                // Hide only foreign elements that are painted above the target.
+                // Children of the target are allowed because they are part of it.
+                for (let i = 0; i < 20; i++) {
+                    const top = document.elementFromPoint(x, y);
+                    if (!top) break;
+
+                    if (top === el || el.contains(top)) {
+                        break;
+                    }
+
+                    // Never hide ancestors of the target.
+                    if (top.contains(el)) {
+                        break;
+                    }
+
+                    window.__idExtractorHidden.push({
+                        el: top,
+                        visibility: top.style.visibility
+                    });
+                    top.style.visibility = "hidden";
+                }
             }
         """)
-        await page.wait_for_timeout(100)
     except Exception:
         pass
 
+    await page.wait_for_timeout(120)
+
+    # Final identity check.
     try:
         if await element.get_attribute("id") != element_id:
             return ""
+    except Exception:
+        return ""
+
+    try:
+        # Screenshot dimensions automatically follow THIS element's rendered size.
         await element.screenshot(
-            path=str(raw_path),
+            path=str(screenshot_path),
             animations="disabled",
             timeout=15000
         )
     except Exception:
         return ""
     finally:
+        # Restore target styles and any elements hidden for overlap removal.
         try:
-            await element.evaluate("""
-                el => {
-                    el.style.boxShadow = el.dataset.idExtractorOldBoxShadow || "";
-                    delete el.dataset.idExtractorOldBoxShadow;
+            await page.evaluate("""
+                () => {
+                    if (window.__idExtractorHidden) {
+                        for (const item of window.__idExtractorHidden) {
+                            try {
+                                item.el.style.visibility = item.visibility || "";
+                            } catch (e) {}
+                        }
+                        delete window.__idExtractorHidden;
+                    }
                 }
             """)
         except Exception:
             pass
 
-    # Slightly enlarge each screenshot independently based on its own size.
-    try:
-        img = Image.open(raw_path).convert("RGB")
-        padding = int(max(4, min(16, max(img.size) * 0.04)))
-        padded = ImageOps.expand(img, border=padding, fill="white")
-        padded.save(screenshot_path, format="PNG")
-        img.close()
-        padded.close()
         try:
-            raw_path.unlink()
+            await element.evaluate("""
+                (el) => {
+                    try {
+                        const key = "idExtractorOriginalStyles";
+                        const old = JSON.parse(el.dataset[key] || "{}");
+
+                        el.style.outline = old.outline || "";
+                        el.style.outlineOffset = old.outlineOffset || "";
+                        el.style.position = old.position || "";
+                        el.style.zIndex = old.zIndex || "";
+                        el.style.isolation = old.isolation || "";
+
+                        delete el.dataset[key];
+                    } catch (e) {}
+                }
+            """)
         except Exception:
             pass
-    except Exception:
-        try:
-            raw_path.rename(screenshot_path)
-        except Exception:
-            return ""
 
     return str(screenshot_path) if screenshot_path.exists() else ""
 
