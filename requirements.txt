@@ -1,3 +1,0 @@
-streamlit
-playwright
-nest_asyncio
