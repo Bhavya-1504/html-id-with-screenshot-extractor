@@ -1,24 +1,11 @@
-# HTML Attribute Regex Extractor
+# HTML ID Regex Extractor — Optimized
 
-The user can choose whether to extract matching elements by:
-- ID
-- Class
+ID-only version for better performance. User enters URLs and an ID regex.
 
-Then enter any regex.
-
-Examples:
-- ID: `^link_`
-- ID: `^link_navdd`
-- Class: `sub-menu__item`
-- Class: `^btn-`
-
-Class regex is tested against the full class attribute string.
-
-Output CSV columns:
-- `id` or `class`
-- `href`
-- `element_text`
-- `tag`
-
-The app keeps OneTrust handling, depth-first traversal, hover reset, screenshots,
-and the clearly separated ELEMENT TEXT panel in each image.
+Optimizations:
+- removes ID/Class branching from the UI
+- shorter hover/reset waits
+- shorter element timeouts
+- keeps OneTrust handling
+- keeps CSV output: id, href, element_text, tag
+- keeps one screenshot per matched ID with separated ELEMENT TEXT footer

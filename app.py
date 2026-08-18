@@ -48,11 +48,11 @@ async def wait_for_page(page):
         await page.wait_for_load_state("networkidle", timeout=10000)
     except Exception:
         pass
-    await page.wait_for_timeout(900)
+    await page.wait_for_timeout(90)
 
 
 async def handle_onetrust_consent(page):
-    await page.wait_for_timeout(1200)
+    await page.wait_for_timeout(500)
 
     banner_selectors = [
         "#onetrust-banner-sdk",
@@ -88,8 +88,8 @@ async def handle_onetrust_consent(page):
         try:
             btn = page.locator(selector).first
             if await btn.is_visible(timeout=1200):
-                await btn.click(timeout=5000)
-                await page.wait_for_timeout(900)
+                await btn.click(timeout=2500)
+                await page.wait_for_timeout(90)
                 return "OneTrust Accept All clicked"
         except Exception:
             continue
@@ -196,7 +196,7 @@ async def close_hover_state(page):
     except Exception:
         pass
 
-    await page.wait_for_timeout(350)
+    await page.wait_for_timeout(80)
 
 
 async def exact_locator(page, element_id):
@@ -221,14 +221,14 @@ async def reveal_hover_chain(page, hover_chain):
                     box["y"] + box["height"] / 2,
                 )
             else:
-                await loc.hover(force=True, timeout=5000)
+                await loc.hover(force=True, timeout=2500)
         except Exception:
             try:
-                await loc.hover(force=True, timeout=5000)
+                await loc.hover(force=True, timeout=2500)
             except Exception:
                 return False
 
-        await page.wait_for_timeout(300)
+        await page.wait_for_timeout(90)
 
     return True
 
@@ -270,7 +270,7 @@ async def capture_exact_element(page, item, folder, index, attribute_type):
             box["x"] + box["width"] / 2,
             box["y"] + box["height"] / 2,
         )
-        await page.wait_for_timeout(450)
+        await page.wait_for_timeout(120)
 
         current_value = (
             (await element.get_attribute("id")) or ""
@@ -283,7 +283,7 @@ async def capture_exact_element(page, item, folder, index, attribute_type):
         await element.screenshot(
             path=str(raw_path),
             animations="disabled",
-            timeout=15000,
+            timeout=10000,
         )
 
         if not raw_path.exists():
@@ -484,25 +484,16 @@ urls_text = st.text_area(
     placeholder="https://example.com/page-1\\nhttps://example.com/page-2",
 )
 
-attribute_type = st.selectbox(
-    "Attribute to extract",
-    options=["id", "class"],
-    format_func=lambda x: "ID" if x == "id" else "Class",
-)
-
-default_regex = r"^link_" if attribute_type == "id" else r".+"
-
 regex_pattern = st.text_input(
-    "Regex",
-    value=default_regex,
-    help="Examples: ^link_  |  ^link_navdd  |  sub-menu__item  |  ^btn-",
+    "ID regex",
+    value=r"^link_",
+    help="Examples: ^link_  |  ^link_navdd  |  ^cta_  |  .*button.*",
 )
 
-if attribute_type == "class":
-    st.caption("Class regex is tested against the full class attribute string.")
+attribute_type = "id"
 
 run = st.button(
-    "🔎 Extract Matching Elements",
+    "🔎 Extract Matching IDs",
     type="primary",
     use_container_width=True,
 )
