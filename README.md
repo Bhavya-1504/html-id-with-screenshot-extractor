@@ -1,11 +1,22 @@
-# HTML ID Regex Extractor — Optimized
+# HTML ID Regex Extractor — Optimized + Screenshots
 
-ID-only version for better performance. User enters URLs and an ID regex.
+This version keeps screenshots and focuses only on ID regex input.
+
+Inputs:
+- one or more URLs
+- ID regex
+
+Outputs:
+- screenshots for every matched ID
+- CSV with: id, href, element_text, tag
+- ZIP containing all screenshots + CSVs
 
 Optimizations:
-- removes ID/Class branching from the UI
-- shorter hover/reset waits
-- shorter element timeouts
-- keeps OneTrust handling
-- keeps CSV output: id, href, element_text, tag
-- keeps one screenshot per matched ID with separated ELEMENT TEXT footer
+- one DOM pass for all IDs/metadata
+- class mode removed
+- no networkidle wait
+- hidden-menu hover chain rebuilt only when necessary
+- short hover/reset waits
+- screenshot progress shown live
+
+Each screenshot includes a clearly separated ELEMENT TEXT panel.
