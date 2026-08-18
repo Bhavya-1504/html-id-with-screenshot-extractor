@@ -97,9 +97,21 @@ async def handle_onetrust_consent(page):
     return "Consent banner detected – Accept All not found"
 
 
-async def collect_ids_depth_first(page):
-    return await page.evaluate("""
-        () => {
+async def collect_matches_depth_first(page, attribute_type, regex_pattern):
+    """
+    Collect matching elements in DOM depth-first order:
+    parent -> child -> grandchild -> next parent.
+    """
+    return await page.evaluate(
+        """
+        ({ attributeType, regexPattern }) => {
+            let rx;
+            try {
+                rx = new RegExp(regexPattern);
+            } catch (e) {
+                return { regex_error: e.message, results: [] };
+            }
+
             const results = [];
 
             function cleanText(el) {
@@ -108,19 +120,49 @@ async def collect_ids_depth_first(page):
                     .trim();
             }
 
-            function visit(node, linkAncestors) {
+            function getValue(el) {
+                return attributeType === "id"
+                    ? (el.id || "")
+                    : (el.getAttribute("class") || "");
+            }
+
+            function domPath(el) {
+                const parts = [];
+                let cur = el;
+                while (cur && cur.nodeType === Node.ELEMENT_NODE) {
+                    const parent = cur.parentElement;
+                    if (!parent) {
+                        parts.unshift(cur.tagName.toLowerCase());
+                        break;
+                    }
+                    const siblings = Array.from(parent.children);
+                    const idx = siblings.indexOf(cur) + 1;
+                    parts.unshift(cur.tagName.toLowerCase() + ":nth-child(" + idx + ")");
+                    cur = parent;
+                }
+                return parts.join(" > ");
+            }
+
+            function visit(node, matchedAncestorPaths) {
                 if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
 
-                let nextAncestors = linkAncestors;
+                const value = getValue(node);
+                rx.lastIndex = 0;
+                const isMatch = value && rx.test(value);
+                rx.lastIndex = 0;
 
-                if (node.id && node.id.startsWith("link_")) {
-                    const chain = [...linkAncestors, node.id];
+                let nextAncestors = matchedAncestorPaths;
+
+                if (isMatch) {
+                    const path = domPath(node);
+                    const chain = [...matchedAncestorPaths, path];
 
                     results.push({
-                        id: node.id,
+                        attribute_value: value,
                         href: node.getAttribute("href") || "",
                         element_text: cleanText(node),
                         tag: node.tagName.toLowerCase(),
+                        dom_path: path,
                         hover_chain: chain
                     });
 
@@ -133,10 +175,11 @@ async def collect_ids_depth_first(page):
             }
 
             visit(document.documentElement, []);
-            return results;
+            return { regex_error: "", results };
         }
-    """)
-
+        """,
+        {"attributeType": attribute_type, "regexPattern": regex_pattern},
+    )
 
 async def close_hover_state(page):
     try:
@@ -190,30 +233,30 @@ async def reveal_hover_chain(page, hover_chain):
     return True
 
 
-async def capture_exact_element(page, item, folder, index):
+async def capture_exact_element(page, item, folder, index, attribute_type):
     """
-    One ID = one image.
-
-    The image contains:
-      - the screenshot of the exact ID-bearing element
-      - a clearly separated metadata footer containing ELEMENT TEXT
-
-    The footer is visually distinct so it cannot be confused with text
-    rendered by the website itself.
+    One matched element = one image.
+    Adds a clearly separated ELEMENT TEXT panel below the element screenshot.
     """
-    element_id = item["id"]
-    raw_path = folder / f"{index:03d}_{safe_name(element_id)}__raw.png"
-    screenshot_path = folder / f"{index:03d}_{safe_name(element_id)}.png"
+    attr_value = item["attribute_value"]
+    raw_path = folder / f"{index:03d}_{safe_name(attr_value)}__raw.png"
+    screenshot_path = folder / f"{index:03d}_{safe_name(attr_value)}.png"
 
     await close_hover_state(page)
 
     try:
-        if not await reveal_hover_chain(page, item.get("hover_chain", [element_id])):
+        if not await reveal_hover_chain(page, item.get("hover_chain", [item["dom_path"]])):
             return ""
 
-        element = await exact_locator(page, element_id)
+        element = page.locator(item["dom_path"]).first
 
-        if await element.get_attribute("id") != element_id:
+        current_value = (
+            (await element.get_attribute("id")) or ""
+            if attribute_type == "id"
+            else (await element.get_attribute("class")) or ""
+        )
+
+        if current_value != attr_value:
             return ""
 
         if not await element.is_visible():
@@ -223,17 +266,20 @@ async def capture_exact_element(page, item, folder, index):
         if not box:
             return ""
 
-        # Final hover on the exact target.
         await page.mouse.move(
             box["x"] + box["width"] / 2,
             box["y"] + box["height"] / 2,
         )
         await page.wait_for_timeout(450)
 
-        if await element.get_attribute("id") != element_id:
+        current_value = (
+            (await element.get_attribute("id")) or ""
+            if attribute_type == "id"
+            else (await element.get_attribute("class")) or ""
+        )
+        if current_value != attr_value:
             return ""
 
-        # Capture only the exact element.
         await element.screenshot(
             path=str(raw_path),
             animations="disabled",
@@ -243,25 +289,17 @@ async def capture_exact_element(page, item, folder, index):
         if not raw_path.exists():
             return ""
 
-        # Append a distinct text panel BELOW the screenshot.
         from PIL import Image, ImageDraw, ImageFont
         import textwrap
 
         img = Image.open(raw_path).convert("RGB")
         img_w, img_h = img.size
 
-        element_text = (item.get("element_text") or "").strip()
-        if not element_text:
-            element_text = "(no visible text)"
-
+        element_text = (item.get("element_text") or "").strip() or "(no visible text)"
         label = "ELEMENT TEXT"
         font = ImageFont.load_default()
 
-        # Keep the metadata panel readable but compact.
-        panel_min_width = 260
-        final_w = max(img_w, panel_min_width)
-
-        # Wrap text based on available width.
+        final_w = max(img_w, 260)
         approx_chars = max(24, min(90, int((final_w - 24) / 7)))
         wrapped = textwrap.wrap(element_text, width=approx_chars) or [element_text]
 
@@ -272,54 +310,31 @@ async def capture_exact_element(page, item, folder, index):
         panel_h = pad + label_h + 6 + (line_h * len(wrapped)) + pad
 
         final = Image.new("RGB", (final_w, img_h + divider_h + panel_h), "white")
-
-        # Center screenshot if its width is narrower than the metadata panel.
-        x_offset = (final_w - img_w) // 2
-        final.paste(img, (x_offset, 0))
+        final.paste(img, ((final_w - img_w) // 2, 0))
 
         draw = ImageDraw.Draw(final)
-
-        # Strong separator so metadata cannot be mistaken for website content.
         draw.rectangle(
             [(0, img_h), (final_w - 1, img_h + divider_h - 1)],
-            fill=(0, 0, 0)
+            fill=(0, 0, 0),
         )
-
         panel_top = img_h + divider_h
-
-        # Metadata panel border.
         draw.rectangle(
             [(0, panel_top), (final_w - 1, final.height - 1)],
             outline=(90, 90, 90),
-            width=1
+            width=1,
         )
 
         y = panel_top + pad
-
-        # Label in a dedicated boxed area.
-        label_box_w = 95
-        label_box_h = 18
         draw.rectangle(
-            [(pad, y), (pad + label_box_w, y + label_box_h)],
+            [(pad, y), (pad + 95, y + 18)],
             outline=(90, 90, 90),
-            width=1
+            width=1,
         )
-        draw.text(
-            (pad + 5, y + 3),
-            label,
-            fill=(0, 0, 0),
-            font=font
-        )
+        draw.text((pad + 5, y + 3), label, fill=(0, 0, 0), font=font)
 
         y += label_h + 8
-
         for line in wrapped:
-            draw.text(
-                (pad, y),
-                line,
-                fill=(0, 0, 0),
-                font=font
-            )
+            draw.text((pad, y), line, fill=(0, 0, 0), font=font)
             y += line_h
 
         final.save(screenshot_path, format="PNG")
@@ -338,22 +353,28 @@ async def capture_exact_element(page, item, folder, index):
     finally:
         await close_hover_state(page)
 
-def write_csv(rows, csv_path):
-    fields = ["id", "href", "element_text", "tag"]
+def write_csv(rows, csv_path, attribute_type):
+    attribute_column = "id" if attribute_type == "id" else "class"
+    fields = [attribute_column, "href", "element_text", "tag"]
+
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fields})
+            writer.writerow({
+                attribute_column: row.get("attribute_value", ""),
+                "href": row.get("href", ""),
+                "element_text": row.get("element_text", ""),
+                "tag": row.get("tag", ""),
+            })
 
-
-async def process_url(browser, url, url_index):
+async def process_url(browser, url, url_index, attribute_type, regex_pattern):
     parsed = urlparse(url)
     folder = OUTPUT_DIR / safe_name(
         f"{url_index}_{parsed.netloc}_{parsed.path.strip('/') or 'homepage'}"
     )
     folder.mkdir(parents=True, exist_ok=True)
-    csv_path = folder / "elements.csv"
+    csv_path = folder / f"{attribute_type}_matches.csv"
 
     page = await browser.new_page(
         viewport={"width": 1440, "height": 1000},
@@ -365,20 +386,32 @@ async def process_url(browser, url, url_index):
         await wait_for_page(page)
 
         consent_status = await handle_onetrust_consent(page)
-        items = await collect_ids_depth_first(page)
+        collection = await collect_matches_depth_first(page, attribute_type, regex_pattern)
+
+        if collection.get("regex_error"):
+            return {
+                "url": url,
+                "folder": folder,
+                "csv": csv_path,
+                "rows": [],
+                "consent_status": consent_status,
+                "error": f"Invalid regex: {collection['regex_error']}",
+            }
+
+        items = collection["results"]
 
         rows = []
         for index, item in enumerate(items, start=1):
-            screenshot = await capture_exact_element(page, item, folder, index)
+            screenshot = await capture_exact_element(page, item, folder, index, attribute_type)
             rows.append({
-                "id": item["id"],
+                "attribute_value": item["attribute_value"],
                 "href": item["href"],
                 "element_text": item["element_text"],
                 "tag": item["tag"],
                 "screenshot": screenshot,
             })
 
-        write_csv(rows, csv_path)
+        write_csv(rows, csv_path, attribute_type)
 
         return {
             "url": url,
@@ -403,7 +436,7 @@ async def process_url(browser, url, url_index):
         await page.close()
 
 
-async def run_extraction(urls, progress_callback=None):
+async def run_extraction(urls, attribute_type, regex_pattern, progress_callback=None):
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -413,7 +446,7 @@ async def run_extraction(urls, progress_callback=None):
         results = []
         try:
             for i, url in enumerate(urls, start=1):
-                result = await process_url(browser, url, i)
+                result = await process_url(browser, url, i, attribute_type, regex_pattern)
                 results.append(result)
                 if progress_callback:
                     progress_callback(i / len(urls), url)
@@ -451,8 +484,25 @@ urls_text = st.text_area(
     placeholder="https://example.com/page-1\\nhttps://example.com/page-2",
 )
 
+attribute_type = st.selectbox(
+    "Attribute to extract",
+    options=["id", "class"],
+    format_func=lambda x: "ID" if x == "id" else "Class",
+)
+
+default_regex = r"^link_" if attribute_type == "id" else r".+"
+
+regex_pattern = st.text_input(
+    "Regex",
+    value=default_regex,
+    help="Examples: ^link_  |  ^link_navdd  |  sub-menu__item  |  ^btn-",
+)
+
+if attribute_type == "class":
+    st.caption("Class regex is tested against the full class attribute string.")
+
 run = st.button(
-    "🔎 Extract IDs & Capture Screenshots",
+    "🔎 Extract Matching Elements",
     type="primary",
     use_container_width=True,
 )
@@ -464,6 +514,16 @@ if run:
 
     if not urls:
         st.warning("Please enter at least one URL.")
+        st.stop()
+
+    if not regex_pattern.strip():
+        st.warning("Please enter a regex.")
+        st.stop()
+
+    try:
+        re.compile(regex_pattern)
+    except re.error as e:
+        st.error(f"Invalid regex: {e}")
         st.stop()
 
     if OUTPUT_DIR.exists():
@@ -478,7 +538,7 @@ if run:
         status.write(f"Processing: {url}")
 
     try:
-        results = asyncio.run(run_extraction(urls, update_progress))
+        results = asyncio.run(run_extraction(urls, attribute_type, regex_pattern, update_progress))
     except Exception as e:
         st.error(f"Extraction failed: {type(e).__name__}: {e}")
         st.stop()
@@ -521,7 +581,8 @@ if run:
             )
 
         for n, item in enumerate(result["rows"], start=1):
-            st.subheader(f"{n}. `{item['id']}`")
+            attribute_label = "ID" if attribute_type == "id" else "Class"
+            st.subheader(f"{n}. {attribute_label}: `{item['attribute_value']}`")
             st.write(f"**Tag:** `{item['tag']}`")
 
             if item["href"]:

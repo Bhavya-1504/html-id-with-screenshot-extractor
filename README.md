@@ -1,18 +1,24 @@
-# HTML ID Extractor — Depth-First Hover + CSV + Text Footer
+# HTML Attribute Regex Extractor
 
-Changes in this version:
-- CSV no longer contains `section`.
-- CSV columns are:
-  - id
-  - href
-  - element_text
-  - tag
-- Each screenshot still captures the exact ID-bearing element.
-- The element text is appended BELOW the screenshot in a separate metadata panel.
-- The metadata panel has:
-  - a strong divider
-  - a border
-  - an `ELEMENT TEXT` label
-- This makes the extracted text visually distinct from text rendered by the webpage.
+The user can choose whether to extract matching elements by:
+- ID
+- Class
 
-OneTrust handling, parent -> child -> grandchild traversal, and hover reset remain unchanged.
+Then enter any regex.
+
+Examples:
+- ID: `^link_`
+- ID: `^link_navdd`
+- Class: `sub-menu__item`
+- Class: `^btn-`
+
+Class regex is tested against the full class attribute string.
+
+Output CSV columns:
+- `id` or `class`
+- `href`
+- `element_text`
+- `tag`
+
+The app keeps OneTrust handling, depth-first traversal, hover reset, screenshots,
+and the clearly separated ELEMENT TEXT panel in each image.
