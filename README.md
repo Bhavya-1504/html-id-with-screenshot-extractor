@@ -20,3 +20,7 @@ Optimizations:
 - screenshot progress shown live
 
 Each screenshot includes a clearly separated ELEMENT TEXT panel.
+
+
+### Output files
+For each URL, the app now creates two CSV files: `<url-path>_id_matches.csv` with full metadata and `<url-path>_ids.csv` containing only the extracted IDs. Screenshot filenames also include the URL path name.

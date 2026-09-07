@@ -26,6 +26,17 @@ def normalize_url(url):
     return url if re.match(r"^https?://", url, re.I) else "https://" + url
 
 
+def url_path_name(url, max_length=120):
+    """Create a readable filename from the URL path."""
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
+    if not path:
+        path = "homepage"
+    else:
+        path = path.replace("/", "_")
+    return safe_name(path, max_length=max_length)
+
+
 def ensure_playwright_browser():
     try:
         subprocess.run(
@@ -287,8 +298,9 @@ async def capture_screenshot(page, item, folder, index):
       - element text panel appended below image
     """
     element_id = item["id"]
-    raw_path = folder / f"{index:03d}_{safe_name(element_id)}__raw.png"
-    final_path = folder / f"{index:03d}_{safe_name(element_id)}.png"
+    path_name = url_path_name(item.get("_source_url", ""))
+    raw_path = folder / f"{path_name}_{index:03d}_{safe_name(element_id)}__raw.png"
+    final_path = folder / f"{path_name}_{index:03d}_{safe_name(element_id)}.png"
 
     element = page.locator(item["dom_path"]).first
 
@@ -387,12 +399,15 @@ def write_csv(rows, csv_path):
 async def process_url(browser, url, url_index, regex_pattern, screenshot_callback):
     parsed = urlparse(url)
 
+    path_name = url_path_name(url)
     folder = OUTPUT_DIR / safe_name(
-        f"{url_index}_{parsed.netloc}_{parsed.path.strip('/') or 'homepage'}"
+        f"{url_index}_{parsed.netloc}_{path_name}"
     )
     folder.mkdir(parents=True, exist_ok=True)
 
-    csv_path = folder / "id_matches.csv"
+    # Include the URL path in every generated file name.
+    csv_path = folder / f"{path_name}_id_matches.csv"
+    ids_csv_path = folder / f"{path_name}_ids.csv"
 
     page = await browser.new_page(
         viewport={"width": 1440, "height": 1000},
@@ -418,6 +433,7 @@ async def process_url(browser, url, url_index, regex_pattern, screenshot_callbac
                 "url": url,
                 "folder": folder,
                 "csv": csv_path,
+                "ids_csv": ids_csv_path,
                 "rows": [],
                 "consent_status": consent_status,
                 "error": f"Invalid regex: {collection['regex_error']}",
@@ -425,8 +441,20 @@ async def process_url(browser, url, url_index, regex_pattern, screenshot_callbac
 
         items = collection["results"]
 
+        # Keep the source URL on each item so screenshots can use the URL path
+        # in their filenames.
+        for item in items:
+            item["_source_url"] = url
+
         # CSV metadata is available immediately, before screenshots.
         write_csv(items, csv_path)
+
+        # A second CSV containing only the extracted IDs.
+        with open(ids_csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id"])
+            for item in items:
+                writer.writerow([item.get("id", "")])
 
         rows = []
         total = len(items)
@@ -454,6 +482,7 @@ async def process_url(browser, url, url_index, regex_pattern, screenshot_callbac
             "url": url,
             "folder": folder,
             "csv": csv_path,
+            "ids_csv": ids_csv_path,
             "rows": rows,
             "consent_status": consent_status,
             "error": "",
@@ -464,6 +493,7 @@ async def process_url(browser, url, url_index, regex_pattern, screenshot_callbac
             "url": url,
             "folder": folder,
             "csv": csv_path,
+            "ids_csv": ids_csv_path,
             "rows": [],
             "consent_status": "",
             "error": f"{type(e).__name__}: {e}",
@@ -646,13 +676,24 @@ if run:
             st.error(result["error"])
             continue
 
+        path_name = url_path_name(result["url"])
+
         with open(result["csv"], "rb") as f:
             st.download_button(
                 f"⬇️ Download CSV — URL {url_index}",
                 f.read(),
-                file_name=f"url_{url_index}_id_matches.csv",
+                file_name=f"{path_name}_id_matches.csv",
                 mime="text/csv",
                 key=f"csv_{url_index}",
+            )
+
+        with open(result["ids_csv"], "rb") as f:
+            st.download_button(
+                f"⬇️ Download IDs only — URL {url_index}",
+                f.read(),
+                file_name=f"{path_name}_ids.csv",
+                mime="text/csv",
+                key=f"ids_csv_{url_index}",
             )
 
         for n, item in enumerate(result["rows"], start=1):
