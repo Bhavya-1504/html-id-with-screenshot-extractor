@@ -299,8 +299,8 @@ async def capture_screenshot(page, item, folder, index):
     """
     element_id = item["id"]
     path_name = url_path_name(item.get("_source_url", ""))
-    raw_path = folder / f"{path_name}_{index:03d}_{safe_name(element_id)}__raw.png"
-    final_path = folder / f"{path_name}_{index:03d}_{safe_name(element_id)}.png"
+    raw_path = folder / f"{safe_name(element_id)}__raw.png"
+    final_path = folder / f"{safe_name(element_id)}.png"
 
     element = page.locator(item["dom_path"]).first
 
@@ -400,14 +400,16 @@ async def process_url(browser, url, url_index, regex_pattern, screenshot_callbac
     parsed = urlparse(url)
 
     path_name = url_path_name(url)
-    folder = OUTPUT_DIR / safe_name(
-        f"{url_index}_{parsed.netloc}_{path_name}"
-    )
+    # Use the URL path as the output folder name.
+    folder = OUTPUT_DIR / path_name
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Include the URL path in every generated file name.
-    csv_path = folder / f"{path_name}_id_matches.csv"
-    ids_csv_path = folder / f"{path_name}_ids.csv"
+    # Output naming:
+    #   <path> - IDs.csv       -> IDs only
+    #   Compiled IDs.csv       -> detailed results
+    #   <ID>.png               -> screenshot for each matching ID
+    csv_path = folder / "Compiled IDs.csv"
+    ids_csv_path = folder / f"{path_name} - IDs.csv"
 
     page = await browser.new_page(
         viewport={"width": 1440, "height": 1000},
@@ -682,7 +684,7 @@ if run:
             st.download_button(
                 f"⬇️ Download CSV — URL {url_index}",
                 f.read(),
-                file_name=f"{path_name}_id_matches.csv",
+                file_name="Compiled IDs.csv",
                 mime="text/csv",
                 key=f"csv_{url_index}",
             )
@@ -691,7 +693,7 @@ if run:
             st.download_button(
                 f"⬇️ Download IDs only — URL {url_index}",
                 f.read(),
-                file_name=f"{path_name}_ids.csv",
+                file_name=f"{path_name} - IDs.csv",
                 mime="text/csv",
                 key=f"ids_csv_{url_index}",
             )
