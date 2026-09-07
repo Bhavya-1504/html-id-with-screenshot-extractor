@@ -408,7 +408,7 @@ async def process_url(browser, url, url_index, regex_pattern, screenshot_callbac
     #   <path> - IDs.csv       -> IDs only
     #   Compiled IDs.csv       -> detailed results
     #   <ID>.png               -> screenshot for each matching ID
-    csv_path = folder / "Compiled IDs.csv"
+    csv_path = folder / f"{path_name} - Compiled IDs.csv"
     ids_csv_path = folder / f"{path_name} - IDs.csv"
 
     page = await browser.new_page(
@@ -684,7 +684,7 @@ if run:
             st.download_button(
                 f"⬇️ Download CSV — URL {url_index}",
                 f.read(),
-                file_name="Compiled IDs.csv",
+                file_name=f"{path_name} - Compiled IDs.csv",
                 mime="text/csv",
                 key=f"csv_{url_index}",
             )
